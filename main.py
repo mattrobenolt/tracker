@@ -1,6 +1,4 @@
-from bencode import bencode
-from urlparse import parse_qs
-from collections import namedtuple
+from urlparse import parse_qsl
 from struct import pack, unpack
 import socket
 import importlib
@@ -29,17 +27,18 @@ def make_failure():
 
 def make_peers(peers, compact=False):
     "Generate a list of peers in an acceptable format for the interwebz"
-    a = '' if compact else []
-    for peer in peers:
-        if compact:
-            # I don't even know what I'm doing
-            a += pack('LH', unpack('>L', socket.inet_aton(peer.ip))[0], peer.port)
-        else:
-            a.append({
-                'id': peer.id,
-                'ip': peer.ip,
-                'port': peer.port
-            })
+    a = 'l'
+    if compact:
+        for peer in peers:
+            packed = pack('LH', unpack('>L', socket.inet_aton(peer.ip))[0], peer.port)
+            a += str(len(packed)) + ':' + packed
+    else:
+        for peer in peers:
+            a += 'd'
+            a += '2:id' + str(len(peer.id)) + ':' + peer.id
+            a += '2:ip' + str(len(peer.ip)) + ':' + peer.ip
+            a += '4:porti' + str(peer.port) + 'e'
+            a += 'e'
     return a
 
 def application(env, start_response):
@@ -47,28 +46,30 @@ def application(env, start_response):
         start_response(STATUS_404, PLAIN_TEXT_HEADERS)
         return ['404']
 
+    start_response(STATUS_200, PLAIN_TEXT_HEADERS)
+
     # Requests MUST be GET
     if env['REQUEST_METHOD'] != 'GET':
         return make_failure()
 
-    qs = parse_qs(env['QUERY_STRING'])
+    qs = dict(parse_qsl(env['QUERY_STRING']))
 
     # Make sure that all of the required keys are present
     if not REQUIRED_KEYS.issubset(set(qs.keys())):
         return make_failure()
 
     try:
-        peer_id = qs['peer_id'][0]
-        torrent_id = qs['info_hash'][0].encode('hex')
-        port = int(qs['port'][0])
-        uploaded = int(qs['uploaded'][0])
-        downloaded = int(qs['downloaded'][0])
+        peer_id = qs['peer_id']
+        torrent_id = qs['info_hash'].encode('hex')
+        port = int(qs['port'])
+        uploaded = int(qs['uploaded'])
+        downloaded = int(qs['downloaded'])
         left = int(qs['left'][0])
         ip = env.get('HTTP_X_FORWARDED_FOR', env['REMOTE_ADDR'])
-        numwant = int(qs.get('numwant', [50])[0])  # Optional
+        numwant = int(qs.get('numwant', 50))  # Optional
         event = qs.get('event')  # Optional
-        compact = bool(int(qs.get('compact', [0])[0]))  # Optional
-    except (ValueError, KeyError) as e:
+        compact = bool(int(qs.get('compact', 0)))  # Optional
+    except (ValueError, KeyError):
         return make_failure()
 
     storage.announce(torrent_id, peer_id, ip, port, uploaded, downloaded, left)
@@ -79,20 +80,19 @@ def application(env, start_response):
     seeders = storage.seeders(torrent_id)
     print "Seeders:", seeders
 
-    response = [bencode({
-        'interval': ANNOUNCE_INTERVAL + min(600, seeders),  # distrbute announces according to Ocelot
-        'min interval': ANNOUNCE_INTERVAL,
-        'peers': make_peers(storage.peers(torrent_id, numwant), compact=compact),
-        'complete': seeders,
-        'downloaded': storage.downloaded(torrent_id),
-        'incomplete': total_peers - seeders
-    })]
+    response = "d"
+    response += "8:intervali" + str(ANNOUNCE_INTERVAL + min(600, seeders)) + "e"
+    response += "12:min intervali" + str(ANNOUNCE_INTERVAL) + "e"
+    response += "8:completei" + str(seeders) + "e"
+    response += "10:downloadedi" + str(storage.downloaded(torrent_id)) + "e"
+    response += "10:incompletei" + str(total_peers - seeders) + "e"
+    response += "5:peers" + make_peers(storage.peers(torrent_id, numwant), compact=compact) + "e"
+    response += "e"
 
     print "Torrent:", torrent_id
     print "Peer id:", peer_id
     print "Response:", response
-    start_response(STATUS_200, PLAIN_TEXT_HEADERS)
-    return response
+    return [response]
 
 if __name__ == '__main__':
     from gevent import monkey; monkey.patch_all()
