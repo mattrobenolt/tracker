@@ -43,9 +43,9 @@ class LocMem(object):
             progress.id = progress_id
             self.progress_by_id[progress_id] = progress
 
-        torrent.peers.add(peer_id)
-        peer.torrents.add(torrent_id)
-        self.progress_by_torrent[torrent_id].add(progress)
+        torrent.peers.add(peer)
+        peer.torrents.add(torrent)
+        self.progress_by_torrent[torrent].add(progress)
 
         # Update progress
         progress.uploaded = uploaded
@@ -68,7 +68,7 @@ class LocMem(object):
         return self.total_peers(torrent_id) - self.seeders(torrent_id)
 
     def peers(self, torrent_id, numwant=50):
-        return [self.peers_by_id[id_] for id_ in list(self.torrents_by_id[torrent_id].peers)[:numwant]]
+        return list(self.torrents_by_id[torrent_id].peers)[:numwant]
 
     def downloaded(self, torrent_id):
         return 0  # We're not keeping track of this
